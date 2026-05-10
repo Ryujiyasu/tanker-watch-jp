@@ -14,6 +14,7 @@ use std::fs;
 use tanker_watch_jp::{
     db, dwt,
     ports::{self, JP_PORTS},
+    runway::{self, PipelineEntry},
 };
 
 const DB_PATH: &str = "tanker.sqlite";
@@ -87,6 +88,16 @@ fn main() -> Result<()> {
 
     let positions = build_positions(&conn, &dwt_lookup)?;
     let arrivals = build_arrivals(&conn, &dwt_lookup)?;
+    let pipeline_entries: Vec<PipelineEntry> = arrivals
+        .iter()
+        .flat_map(|p| {
+            p.arrivals.iter().map(|a| PipelineEntry {
+                cargo_bbl: a.cargo_bbl.unwrap_or(0),
+                eta: a.eta,
+            })
+        })
+        .collect();
+    let runway = runway::compute(&pipeline_entries);
 
     fs::write(
         format!("{OUT_DIR}/positions.json"),
@@ -97,20 +108,27 @@ fn main() -> Result<()> {
         serde_json::to_string(&arrivals)?,
     )?;
     fs::write(
+        format!("{OUT_DIR}/runway.json"),
+        serde_json::to_string(&runway)?,
+    )?;
+    fs::write(
         format!("{OUT_DIR}/meta.json"),
         serde_json::to_string_pretty(&serde_json::json!({
             "generated_at": Utc::now().to_rfc3339(),
             "vessel_count": positions.features.len(),
             "port_count": arrivals.iter().filter(|p| !p.arrivals.is_empty()).count(),
             "arrival_count": arrivals.iter().map(|p| p.arrivals.len()).sum::<usize>(),
+            "pipeline_bbl": runway.pipeline_bbl,
+            "effective_runway_days": runway.effective_runway_days,
         }))?,
     )?;
 
     println!(
-        "exported: {} vessels, {} arrivals across {} ports → {}/",
+        "exported: {} vessels, {} arrivals across {} ports, runway {} days → {}/",
         positions.features.len(),
         arrivals.iter().map(|p| p.arrivals.len()).sum::<usize>(),
         arrivals.iter().filter(|p| !p.arrivals.is_empty()).count(),
+        runway.effective_runway_days,
         OUT_DIR,
     );
     Ok(())
