@@ -1,0 +1,77 @@
+name: snapshot
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/snapshot.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Restore SQLite snapshot
+        id: db-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tanker.sqlite
+          key: tanker-sqlite-${{ github.run_id }}
+          restore-keys: |
+            tanker-sqlite-
+
+      - name: Build
+        run: cargo build --release --bins
+
+      - name: Ingest live AIS (5 min)
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+        run: |
+          if [ -z "$AISSTREAM_API_KEY" ]; then
+            echo "AISSTREAM_API_KEY secret not set; skipping live ingest" >&2
+            exit 0
+          fi
+          timeout 300 ./target/release/tanker-watch-jp || true
+
+      - name: Export snapshot JSON
+        run: ./target/release/export
+
+      - name: Save SQLite snapshot
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: tanker.sqlite
+          key: tanker-sqlite-${{ github.run_id }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4
