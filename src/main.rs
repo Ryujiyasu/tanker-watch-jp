@@ -33,13 +33,20 @@ async fn main() -> Result<()> {
     ws.send(Message::Text(sub.to_string())).await?;
 
     while let Some(msg) = ws.next().await {
-        match msg? {
-            Message::Text(txt) => handle(&txt)?,
+        let txt = match msg? {
+            Message::Text(t) => t.to_string(),
+            Message::Binary(b) => match std::str::from_utf8(&b) {
+                Ok(s) => s.to_owned(),
+                Err(_) => continue,
+            },
             Message::Close(c) => {
                 warn!(?c, "stream closed");
                 break;
             }
-            _ => {}
+            _ => continue,
+        };
+        if let Err(e) = handle(&txt) {
+            warn!(?e, "handle error");
         }
     }
     Ok(())
