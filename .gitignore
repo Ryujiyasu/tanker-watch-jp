@@ -2,5 +2,5 @@
 .env
 *.db
 *.sqlite
-*.sqlite-journal
+*.sqlite-*
 .DS_Store
