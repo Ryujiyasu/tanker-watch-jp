@@ -159,6 +159,12 @@ async fn handle(
                     _ => None,
                 };
                 let est = dwt::estimate(dwt_lookup, imo, loa, beam);
+                let cargo = match (loa, draught, est) {
+                    (Some(l), Some(d), Some(e)) => {
+                        dwt::estimate_cargo(l as f64, d, e.dwt)
+                    }
+                    _ => None,
+                };
                 info!(
                     mmsi,
                     imo,
@@ -169,6 +175,11 @@ async fn handle(
                     ?destination,
                     dwt = est.map(|e| e.dwt),
                     dwt_src = ?est.map(|e| e.source),
+                    t_design = cargo.map(|c| c.t_design_m),
+                    t_ballast = cargo.map(|c| c.t_ballast_m),
+                    load_pct = cargo.map(|c| (c.load_ratio * 100.0).round() as u64),
+                    cargo_t = cargo.map(|c| c.cargo_tonnes),
+                    cargo_bbl = cargo.map(|c| c.cargo_bbl_crude),
                     "tanker static"
                 );
             }
