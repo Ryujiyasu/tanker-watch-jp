@@ -5,12 +5,11 @@
 //! and crude-equivalent cargo via `dwt`, and prints a per-port queue
 //! sorted by ETA.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, Utc};
-use rusqlite::Connection;
 use std::collections::HashMap;
 use tanker_watch_jp::{
-    dwt,
+    db, dwt,
     ports::{self, Port, JP_PORTS},
 };
 
@@ -29,7 +28,7 @@ struct Arrival {
 }
 
 fn main() -> Result<()> {
-    let conn = Connection::open(DB_PATH).with_context(|| format!("open {DB_PATH}"))?;
+    let conn = db::open_with_schema(DB_PATH)?;
 
     let mut stmt = conn.prepare(
         r#"SELECT v.name, v.dim_a + v.dim_b AS loa, v.dim_c + v.dim_d AS beam,

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>tanker-watch-jp</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  :root { --panel-w: 380px; --bg: #0d1117; --fg: #e6edf3; --dim: #8b949e; --border: #30363d; --accent: #f0883e; --loaded: #d73a49; --ballast: #58a6ff; --partial: #d29922; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, "Segoe UI", "Hiragino Sans", sans-serif; background: var(--bg); color: var(--fg); }
+  #map { position: absolute; inset: 0 var(--panel-w) 0 0; }
+  #panel { position: absolute; top: 0; bottom: 0; right: 0; width: var(--panel-w); overflow-y: auto; padding: 16px; border-left: 1px solid var(--border); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .header { font-size: 12px; color: var(--dim); margin-bottom: 16px; }
+  h2 { font-size: 13px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); color: var(--accent); }
+  .arrival { font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .arrival:last-child { border-bottom: none; }
+  .name { font-weight: 600; color: var(--fg); }
+  .meta { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .cargo { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; margin-top: 2px; }
+  .cargo.loaded { color: var(--loaded); }
+  .cargo.partial { color: var(--partial); }
+  .cargo.ballast { color: var(--ballast); }
+  .empty { color: var(--dim); font-size: 12px; padding: 12px 0; }
+  .maplibregl-popup-content { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 10px 12px; font-size: 12px; }
+  .maplibregl-popup-tip { border-top-color: var(--border) !important; }
+  .pop-name { font-weight: 600; margin-bottom: 4px; }
+  .pop-row { color: var(--dim); }
+  .pop-row strong { color: var(--fg); }
+  @media (max-width: 720px) {
+    :root { --panel-w: 0; }
+    #panel { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside id="panel">
+  <h1>tanker-watch-jp</h1>
+  <div class="header">日本向け原油タンカー追跡 · last update: <span id="updated">…</span></div>
+  <div id="arrivals">loading…</div>
+</aside>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json',
+  center: [125, 25],
+  zoom: 3,
+  attributionControl: { compact: true },
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-left');
+
+function bblLabel(b) {
+  if (b == null) return '—';
+  if (b >= 1e6) return (b / 1e6).toFixed(2) + 'M';
+  if (b >= 1e3) return (b / 1e3).toFixed(0) + 'k';
+  return String(b);
+}
+
+function loadClass(pct) {
+  if (pct == null) return 'partial';
+  if (pct >= 70) return 'loaded';
+  if (pct >= 25) return 'partial';
+  return 'ballast';
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function load() {
+  const [positions, arrivals, meta] = await Promise.all([
+    fetch('data/positions.json', { cache: 'no-store' }).then(r => r.json()),
+    fetch('data/arrivals.json',  { cache: 'no-store' }).then(r => r.json()),
+    fetch('data/meta.json',      { cache: 'no-store' }).then(r => r.json()),
+  ]);
+
+  document.getElementById('updated').textContent = new Date(meta.generated_at).toLocaleString('ja-JP');
+
+  const panel = document.getElementById('arrivals');
+  if (!arrivals.length) {
+    panel.innerHTML = '<div class="empty">日本港向けタンカー未検出。ingester を起動して数分待つ。</div>';
+  } else {
+    panel.innerHTML = arrivals.map(port => `
+      <h2>${escapeHtml(port.name_ja)} ${escapeHtml(port.name_en)} (${escapeHtml(port.code)}) — ${port.arrivals.length} 隻</h2>
+      ${port.arrivals.map(a => `
+        <div class="arrival">
+          <div class="name">${escapeHtml(a.name)}</div>
+          <div class="meta">ETA ${escapeHtml(a.eta ? new Date(a.eta).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—')} · LOA ${a.loa ?? '?'}m · 喫水 ${a.draught != null ? a.draught.toFixed(1) + 'm' : '?'}</div>
+          <div class="cargo ${loadClass(a.load_pct)}">~${bblLabel(a.cargo_bbl)} bbl crude · ${a.load_pct ?? '?'}% loaded</div>
+        </div>
+      `).join('')}
+    `).join('');
+  }
+
+  if (map.isStyleLoaded()) renderTankers(positions);
+  else map.once('load', () => renderTankers(positions));
+}
+
+function renderTankers(positions) {
+  if (map.getSource('tankers')) {
+    map.getSource('tankers').setData(positions);
+    return;
+  }
+  map.addSource('tankers', { type: 'geojson', data: positions });
+  map.addLayer({
+    id: 'tankers',
+    type: 'circle',
+    source: 'tankers',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 4, 8, 10],
+      'circle-color': ['case',
+        ['>=', ['coalesce', ['get', 'load_pct'], -1], 70], '#d73a49',
+        ['>=', ['coalesce', ['get', 'load_pct'], -1], 25], '#d29922',
+        ['>=', ['coalesce', ['get', 'load_pct'], -1],  0], '#58a6ff',
+        '#8b949e',
+      ],
+      'circle-stroke-width': 1,
+      'circle-stroke-color': '#0d1117',
+    },
+  });
+
+  map.on('click', 'tankers', e => {
+    const p = e.features[0].properties;
+    const html = `
+      <div class="pop-name">${escapeHtml(p.name)}</div>
+      <div class="pop-row">IMO <strong>${escapeHtml(p.imo ?? '—')}</strong> · MMSI ${p.mmsi}</div>
+      <div class="pop-row">LOA <strong>${p.loa ?? '?'}m</strong> · 喫水 <strong>${p.draught ?? '?'}m</strong></div>
+      <div class="pop-row">DWT ~${p.dwt_t != null ? p.dwt_t.toLocaleString() : '?'}t · ${bblLabel(p.cargo_bbl)} bbl crude (${p.load_pct ?? '?'}%)</div>
+      <div class="pop-row">→ ${escapeHtml(p.destination ?? '—')}${p.port_name_ja ? ' (' + escapeHtml(p.port_name_ja) + ')' : ''}</div>
+      <div class="pop-row">ETA ${escapeHtml(p.eta ?? '—')}</div>
+    `;
+    new maplibregl.Popup({ closeOnClick: true })
+      .setLngLat(e.lngLat)
+      .setHTML(html)
+      .addTo(map);
+  });
+
+  map.on('mouseenter', 'tankers', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'tankers', () => map.getCanvas().style.cursor = '');
+}
+
+load().catch(err => {
+  document.getElementById('arrivals').innerHTML =
+    `<div class="empty">load error: ${escapeHtml(err.message)}<br>web/data/*.json が無い場合は <code>cargo run --release --bin export</code> を実行。</div>`;
+});
+
+// Auto-refresh every 60s
+setInterval(() => load().catch(() => {}), 60000);
+</script>
+</body>
+</html>

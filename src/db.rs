@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS dwt_lookup (
 );
 "#;
 
-fn open_with_schema(path: &str) -> Result<Connection> {
+pub fn open_with_schema(path: &str) -> Result<Connection> {
     let conn = Connection::open(path).with_context(|| format!("open {path}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
