@@ -1,11 +1,12 @@
 mod db;
+mod dwt;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use db::DbWrite;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -27,7 +28,12 @@ async fn main() -> Result<()> {
         .context("set AISSTREAM_API_KEY (free key: https://aisstream.io)")?;
 
     let initial = db::load_tanker_mmsis(DB_PATH)?;
-    info!(known_tankers = initial.len(), "loaded vessel catalog");
+    let dwt_lookup = Arc::new(db::load_dwt_lookup(DB_PATH)?);
+    info!(
+        known_tankers = initial.len(),
+        dwt_entries = dwt_lookup.len(),
+        "loaded vessel catalog"
+    );
     let tanker_mmsis = Arc::new(RwLock::new(initial));
 
     let (db_tx, db_rx) = mpsc::channel::<DbWrite>(8192);
@@ -60,7 +66,7 @@ async fn main() -> Result<()> {
             }
             _ => continue,
         };
-        if let Err(e) = handle(&txt, &tanker_mmsis, &db_tx).await {
+        if let Err(e) = handle(&txt, &tanker_mmsis, &dwt_lookup, &db_tx).await {
             warn!(?e, "handle error");
         }
     }
@@ -73,6 +79,7 @@ async fn main() -> Result<()> {
 async fn handle(
     txt: &str,
     tanker_mmsis: &Arc<RwLock<HashSet<u64>>>,
+    dwt_lookup: &Arc<HashMap<u64, u64>>,
     db_tx: &mpsc::Sender<DbWrite>,
 ) -> Result<()> {
     let v: Value = serde_json::from_str(txt)?;
@@ -143,7 +150,27 @@ async fn handle(
                         ts: ts.clone(),
                     })
                     .await?;
-                info!(mmsi, ?name, ?ship_type, ?draught, ?destination, "tanker static");
+                let loa = match (dim_a, dim_b) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    _ => None,
+                };
+                let beam = match (dim_c, dim_d) {
+                    (Some(c), Some(d)) => Some(c + d),
+                    _ => None,
+                };
+                let est = dwt::estimate(dwt_lookup, imo, loa, beam);
+                info!(
+                    mmsi,
+                    imo,
+                    ?name,
+                    loa,
+                    beam,
+                    ?draught,
+                    ?destination,
+                    dwt = est.map(|e| e.dwt),
+                    dwt_src = ?est.map(|e| e.source),
+                    "tanker static"
+                );
             }
         }
         "PositionReport" => {

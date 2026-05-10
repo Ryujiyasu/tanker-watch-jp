@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS static_history (
     eta         TEXT,
     PRIMARY KEY (mmsi, ts)
 );
+
+CREATE TABLE IF NOT EXISTS dwt_lookup (
+    imo        INTEGER PRIMARY KEY,
+    dwt        INTEGER NOT NULL,
+    source     TEXT    NOT NULL,
+    fetched_at TEXT    NOT NULL
+);
 "#;
 
 fn open_with_schema(path: &str) -> Result<Connection> {
@@ -90,6 +97,18 @@ pub fn load_tanker_mmsis(path: &str) -> Result<HashSet<u64>> {
         set.insert(r? as u64);
     }
     Ok(set)
+}
+
+pub fn load_dwt_lookup(path: &str) -> Result<std::collections::HashMap<u64, u64>> {
+    let conn = open_with_schema(path)?;
+    let mut stmt = conn.prepare("SELECT imo, dwt FROM dwt_lookup")?;
+    let mut map = std::collections::HashMap::new();
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+    for r in rows {
+        let (imo, dwt) = r?;
+        map.insert(imo as u64, dwt as u64);
+    }
+    Ok(map)
 }
 
 pub fn spawn_writer(
