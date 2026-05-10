@@ -1,8 +1,6 @@
-mod db;
-mod dwt;
-
 use anyhow::{Context, Result};
 use chrono::Utc;
+use tanker_watch_jp::{db, dwt};
 use db::DbWrite;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
