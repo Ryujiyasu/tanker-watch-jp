@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "iran_war=info".into()),
+                .unwrap_or_else(|_| "tanker_watch_jp=info".into()),
         )
         .init();
 
