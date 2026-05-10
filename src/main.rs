@@ -35,10 +35,7 @@ async fn main() -> Result<()> {
     let tanker_mmsis = Arc::new(RwLock::new(initial));
 
     let (db_tx, db_rx) = mpsc::channel::<DbWrite>(8192);
-    let writer = db::spawn_writer(DB_PATH.into(), db_rx);
-
-    let (mut ws, _) = connect_async(STREAM_URL).await?;
-    info!("connected");
+    let _writer = db::spawn_writer(DB_PATH.into(), db_rx);
 
     let sub = json!({
         "APIKey": api_key,
@@ -49,6 +46,33 @@ async fn main() -> Result<()> {
         ],
         "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
     });
+
+    // Reconnect with exponential backoff. Caller (timeout / Ctrl+C)
+    // terminates the loop; we never give up of our own accord.
+    let mut backoff_secs: u64 = 2;
+    loop {
+        match run_session(&sub, &tanker_mmsis, &dwt_lookup, &db_tx).await {
+            Ok(()) => {
+                info!(backoff_secs, "stream ended cleanly, reconnecting");
+            }
+            Err(e) => {
+                warn!(?e, backoff_secs, "stream errored, reconnecting");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(60);
+    }
+
+}
+
+async fn run_session(
+    sub: &Value,
+    tanker_mmsis: &Arc<RwLock<HashSet<u64>>>,
+    dwt_lookup: &Arc<HashMap<u64, u64>>,
+    db_tx: &mpsc::Sender<DbWrite>,
+) -> Result<()> {
+    let (mut ws, _) = connect_async(STREAM_URL).await.context("connect")?;
+    info!("connected");
     ws.send(Message::Text(sub.to_string())).await?;
 
     while let Some(msg) = ws.next().await {
@@ -60,17 +84,14 @@ async fn main() -> Result<()> {
             },
             Message::Close(c) => {
                 warn!(?c, "stream closed");
-                break;
+                return Ok(());
             }
             _ => continue,
         };
-        if let Err(e) = handle(&txt, &tanker_mmsis, &dwt_lookup, &db_tx).await {
+        if let Err(e) = handle(&txt, tanker_mmsis, dwt_lookup, db_tx).await {
             warn!(?e, "handle error");
         }
     }
-
-    drop(db_tx);
-    writer.await??;
     Ok(())
 }
 
